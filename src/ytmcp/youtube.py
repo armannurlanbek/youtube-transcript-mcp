@@ -143,3 +143,58 @@ class Fetched:
     def from_json(cls, data: dict) -> "Fetched":
         fields = {k: data[k] for k in ("video_id", "title", "channel", "duration_seconds", "published", "vtt")}
         return cls(track=Track(**data["track"]), **fields)
+
+
+def ytdlp_options(cookiefile: str | None) -> dict:
+    options = {
+        "skip_download": True,
+        "quiet": True,
+        "no_warnings": True,
+        "noprogress": True,
+        "socket_timeout": 30,
+        # YouTube withholds captions from datacenter IPs unless the request
+        # (a) solves a player-JS challenge and (b) uses a client that does not
+        # need a PO token. `web_embedded` returns captions without a PO token;
+        # the EJS remote component solves the JS challenge in deno (deno must
+        # be on PATH).
+        "extractor_args": {"youtube": {"player_client": ["web_embedded"]}},
+        "remote_components": ["ejs:github"],
+    }
+    if cookiefile:
+        # Datacenter IPs need a signed-in session. yt-dlp writes the cookie jar
+        # back to this file on close, so it must belong to this service alone.
+        options["cookiefile"] = cookiefile
+    return options
+
+
+def _published(upload_date: object) -> str | None:
+    text = str(upload_date or "")
+    return f"{text[:4]}-{text[4:6]}-{text[6:8]}" if re.fullmatch(r"\d{8}", text) else None
+
+
+def fetch_captions(video_id: str, language: str | None, *, cookiefile: str | None = None,
+                   ydl_factory=None) -> Fetched:
+    """One metadata request, then exactly one caption track — never several languages
+    at once (that triggers HTTP 429)."""
+    if ydl_factory is None:
+        import yt_dlp
+        ydl_factory = yt_dlp.YoutubeDL
+    try:
+        with ydl_factory(ytdlp_options(cookiefile)) as ydl:
+            info = ydl.extract_info(f"https://www.youtube.com/watch?v={video_id}", download=False) or {}
+            track = choose_track(info, language)
+            vtt = ydl.urlopen(track.url).read().decode("utf-8", errors="replace")
+    except TranscriptError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - yt-dlp raises many types; the message decides
+        raise TranscriptError(classify_error(str(exc)), str(exc)) from exc
+    duration = info.get("duration")
+    return Fetched(
+        video_id=video_id,
+        title=str(info.get("title") or video_id),
+        channel=str(info.get("channel") or info.get("uploader") or ""),
+        duration_seconds=int(duration) if isinstance(duration, (int, float)) else None,
+        published=_published(info.get("upload_date")),
+        track=track,
+        vtt=vtt,
+    )
