@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import sys
 from pathlib import Path
@@ -13,6 +14,7 @@ from ytmcp.config import ConfigError, load_dotenv, load_settings
 
 
 def main() -> None:
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     load_dotenv(Path(".env"))
     try:
         settings = load_settings(os.environ)

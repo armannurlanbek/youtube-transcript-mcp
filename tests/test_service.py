@@ -1,5 +1,7 @@
 import asyncio
+import logging
 import os
+import re
 import sys
 from datetime import UTC, datetime
 
@@ -135,7 +137,39 @@ async def test_subprocess_runner_garbage_output():
     with pytest.raises(TranscriptError) as e:
         await subprocess_runner(VID, None, timeout=30, cookies=None,
                                 command=[sys.executable, "-c", "import sys; print('nope'); sys.exit(3)"])
-    assert e.value.kind == "failed"
+    assert e.value.kind == "failed" and e.value.detail == "worker exited with code 3"
+
+
+async def test_subprocess_runner_hides_stderr_and_logs_it_scrubbed(caplog):
+    cookie = "/secret/dir/cookies.txt"
+    code = f"import sys; print('boom reading {cookie} and C:\\\\x', file=sys.stderr); sys.exit(2)"
+    with caplog.at_level(logging.WARNING, logger="ytmcp"):
+        with pytest.raises(TranscriptError) as e:
+            await subprocess_runner(VID, None, timeout=30, cookies=cookie,
+                                    command=[sys.executable, "-c", code])
+    assert e.value.detail == "worker exited with code 2" and "boom" not in str(e.value)
+    assert "boom reading" in caplog.text and cookie not in caplog.text and "<cookies>" in caplog.text
+
+
+async def test_subprocess_runner_scrubs_repr_form_of_cookie_path(caplog):
+    cookie = "C:\\secret\\cookies.txt"
+    code = f"import sys; print({cookie!r}.encode('unicode_escape').decode(), repr({cookie!r}), file=sys.stderr); sys.exit(2)"
+    with caplog.at_level(logging.WARNING, logger="ytmcp"):
+        with pytest.raises(TranscriptError):
+            await subprocess_runner(VID, None, timeout=30, cookies=cookie,
+                                    command=[sys.executable, "-c", code])
+    assert "worker stderr" in caplog.text and "secret" not in caplog.text
+
+
+async def test_subprocess_runner_child_does_not_see_the_secret_key(monkeypatch):
+    monkeypatch.setenv("YTM_SECRET_KEY", "s" * 40)
+    monkeypatch.setenv("YTM_OTHER", "kept")
+    out = await subprocess_runner(VID, None, timeout=30, cookies="/c.txt",
+                                  command=[sys.executable, "-c",
+                                           "import json,os; print(json.dumps({'ok': False, 'kind': 'x', "
+                                           "'detail': [os.environ.get('YTM_SECRET_KEY'), os.environ.get('YTM_OTHER'), "
+                                           "os.environ.get('YTM_COOKIES')]}))"])
+    assert out["detail"] == [None, "kept", "/c.txt"]
 
 
 async def _dead(pid, within=2.0):
@@ -219,3 +253,65 @@ async def test_deleted_file_is_refetched(tmp_path):
     rec2, cached = await t.transcribe(VID, None)
     assert cached is False and len(calls) == 2
     assert t.store.read_markdown(rec2)
+
+
+async def test_logs_one_line_per_call_without_secrets(tmp_path, caplog):
+    async def runner(video_id, language):
+        return ok_result()
+
+    t = make(tmp_path, runner)
+    t.settings = Settings(secret_key="K" * 40, public_url="https://t.example.com", data_dir=tmp_path,
+                          cookies="/secret/cookies.txt")
+    with caplog.at_level(logging.INFO, logger="ytmcp"):
+        await t.transcribe(VID, None)
+        await t.transcribe(VID, "en")
+    lines = [r.getMessage() for r in caplog.records if r.name == "ytmcp"]
+    assert len(lines) == 2
+    assert re.fullmatch(rf"video={VID} lang=original result=fetched seconds=\d+\.\d", lines[0])
+    assert re.fullmatch(rf"video={VID} lang=en result=cached seconds=\d+\.\d", lines[1])
+    assert "K" * 40 not in caplog.text and "cookies" not in caplog.text
+
+
+@pytest.mark.parametrize("result,kind", [
+    ({"ok": False, "kind": "login_required", "detail": "x"}, "login_required"),
+    (ok_result(vtt="WEBVTT\n"), "no_captions"),
+])
+async def test_logs_error_kind(tmp_path, caplog, result, kind):
+    async def runner(video_id, language):
+        return result
+
+    t = make(tmp_path, runner)
+    with caplog.at_level(logging.INFO, logger="ytmcp"):
+        with pytest.raises(TranscriptError):
+            await t.transcribe(VID, "ru")
+    lines = [r.getMessage() for r in caplog.records if r.name == "ytmcp"]
+    assert len(lines) == 1 and f"lang=ru result=error:{kind} seconds=" in lines[0]
+
+
+async def test_logs_busy_and_unexpected_errors(tmp_path, caplog):
+    async def runner(video_id, language):
+        raise RuntimeError("boom")
+
+    t = make(tmp_path, runner)
+    with caplog.at_level(logging.INFO, logger="ytmcp"):
+        with pytest.raises(RuntimeError):
+            await t.transcribe(VID, None)
+    assert "result=error:unexpected" in caplog.text
+
+
+async def test_parsing_and_saving_run_off_the_event_loop(tmp_path, monkeypatch):
+    import threading
+    seen = {}
+    from ytmcp import service
+    real = service.parse_vtt
+
+    def spy(text):
+        seen["thread"] = threading.current_thread()
+        return real(text)
+    monkeypatch.setattr(service, "parse_vtt", spy)
+
+    async def runner(video_id, language):
+        return ok_result()
+
+    await make(tmp_path, runner).transcribe(VID, None)
+    assert seen["thread"] is not threading.main_thread()
