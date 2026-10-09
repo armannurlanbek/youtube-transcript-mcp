@@ -63,6 +63,16 @@ All settings are environment variables (or lines in `.env`); `.env.example` docu
    `.venv/bin/python -m ytmcp.check [video_id]` (exit status 0 means it works; `YTM_CHECK_VIDEO` sets the
    default video).
 
+## Updating
+
+```bash
+git pull && .venv/bin/pip install -e . && sudo systemctl restart ytmcp
+```
+
+Re-running `deploy/install-service.sh` only rewrites the unit file and does not restart a running service.
+Service logs (one line per transcript request, without keys or text) are in `journalctl -u ytmcp`. A failing
+weekly yt-dlp check shows up as cron mail to the service user.
+
 ## Connect in Claude
 
 In Claude, go to Settings, then Connectors, then Add custom connector, and enter:
@@ -99,14 +109,21 @@ Any other path returns an empty 404.
   inside it must not be followed.
 - Each fetch runs yt-dlp in a separate worker process group that is killed on timeout.
 - Transcripts are kept forever under `YTM_DATA_DIR` (`./data` by default). Back that directory up if you care
-  about the history; delete files from it to remove transcripts.
+  about the history; to remove a transcript, delete its `.md` file; the history row is cleaned up on next access.
+
+MCP Inspector in a browser sends an `Origin` header, which the server only accepts from the connector hosts
+(Claude) and, for local testing, from `localhost` when `YTM_PUBLIC_URL` itself is a `localhost` or `127.0.0.1`
+URL. So the Inspector works against a local server, not against the public hostname.
 
 ## Limits
 
 - Captions only: a video without captions cannot be transcribed.
 - One video per call.
-- One fetch at a time. A second request waits up to 30 seconds for its turn, then gets a "busy" error.
-- A fetch is stopped after 200 seconds (`YTM_FETCH_TIMEOUT`).
+- One fetch at a time. A second request waits up to 25 seconds (`YTM_LOCK_WAIT`) for its turn, then gets a "busy" error.
+- A fetch is stopped after 60 seconds (`YTM_FETCH_TIMEOUT`); typical fetches take 5 to 10 seconds. Cloudflare's edge
+  (and most proxies) answer 524 when the server sends nothing for about 100 seconds, and a tool result is sent
+  only when the tool finishes, so the two waits together are capped at 95 seconds; the server refuses to start
+  with larger values.
 - Tool results are paged at 100,000 characters.
 
 ## Development

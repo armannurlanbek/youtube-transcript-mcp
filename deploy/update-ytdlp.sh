@@ -6,7 +6,6 @@ set -uo pipefail
 export PATH="$HOME/.deno/bin:$PATH"
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO"
-set -a; . "$REPO/.env" 2>/dev/null || true; set +a
 
 version() { .venv/bin/python -c 'import yt_dlp; print(yt_dlp.version.__version__)' 2>/dev/null || echo unknown; }
 

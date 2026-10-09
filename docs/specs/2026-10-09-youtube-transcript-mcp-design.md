@@ -173,8 +173,8 @@ with "auto-generated" or "translated" noted in the file header.
 
 ```
 tool call ─▶ Transcriber.transcribe(video_id, language)
-   │  acquire the single-flight lock (wait ≤ 30 s, else "busy, try again")
-   │  spawn worker: probe → choose_track → download_track  (deadline 200 s)
+   │  acquire the single-flight lock (wait ≤ 25 s, else "busy, try again")
+   │  spawn worker: probe → choose_track → download_track  (deadline 60 s)
    │      worker exits non-zero / times out → kill, map to a clear error
    │  parse_vtt → paragraphs → to_markdown
    │  store: write <video_id>.<lang>.md atomically, upsert the row
@@ -182,8 +182,9 @@ tool call ─▶ Transcriber.transcribe(video_id, language)
 ```
 
 One fetch at a time across the whole process (the server shares a small
-machine; a second request waits for the lock). The deadline of 200 s plus a
-30 s wait for the lock stays inside Claude's 240 s.
+machine; a second request waits for the lock). The deadline of 60 s plus a
+25 s wait for the lock stays under the ~100 s after which Cloudflare's edge answers 524 when the origin sends
+nothing (JSON responses send nothing until the tool finishes); `load_settings` enforces a total of at most 95 s.
 
 ## The `.md` file
 
@@ -285,7 +286,7 @@ The worker maps failures to kinds; the tool returns a one-line message:
 | `unavailable` | "private video", "video unavailable", "confirm your age", "members-only" | This video is private, removed, age-restricted, or members-only. |
 | `no_captions` | no usable track / empty parse | This video has no captions (in that language: available …). |
 | `timeout` | worker past the deadline (killed) | YouTube took too long. Try again in a minute. |
-| `busy` | lock not acquired in 30 s | Another transcript is being made. Try again in a minute. |
+| `busy` | lock not acquired in 25 s | Another transcript is being made. Try again in a minute. |
 | `failed` | anything else | Could not fetch the transcript: <first 300 chars of error>. |
 
 Errors are returned as MCP tool errors (`isError`), never as exceptions that
@@ -302,7 +303,8 @@ kill the session. Nothing is stored on failure.
 | `YTM_HOST` / `YTM_PORT` | `127.0.0.1` / `8090` | bind address |
 | `YTM_DATA_DIR` | `./data` | database and files |
 | `YTM_COOKIES` | empty | path to this service's own `cookies.txt` |
-| `YTM_FETCH_TIMEOUT` | `200` | worker deadline, seconds |
+| `YTM_FETCH_TIMEOUT` | `60` | worker deadline, seconds |
+| `YTM_LOCK_WAIT` | `25` | seconds a second request waits for the lock; timeout + wait ≤ 95 (proxy limit ~100 s) |
 
 ## Deployment (generic, in `deploy/` and the README)
 
