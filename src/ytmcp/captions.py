@@ -9,6 +9,7 @@ Cue = tuple[float, str]
 
 _NOTE = re.compile(r"^NOTE(\s|$)")
 _TAG = re.compile(r"<[^>]+>")
+_STAMP = re.compile(r"^(\d+:)?\d{1,2}:\d{2}[.,]\d{3}$")
 
 
 def _seconds(stamp: str) -> float:
@@ -20,15 +21,17 @@ def _seconds(stamp: str) -> float:
 
 
 def _is_timing(line: str) -> bool:
-    stamp = line.split("-->", 1)[0].strip() if "-->" in line else ""
-    return stamp[:1].isdigit() and ":" in stamp  # spoken text may contain an arrow too
+    """A cue timing line: a full WebVTT timestamp before the arrow."""
+    return "-->" in line and bool(_STAMP.match(line.split("-->", 1)[0].strip()))
 
 
-def _next_is_timing(lines: list[str], index: int) -> bool:
-    for following in lines[index + 1:]:
-        if following.strip():
-            return _is_timing(following.strip())
-    return False
+def _is_malformed_timing(line: str) -> bool:
+    """Timing-shaped garbage ('00:xx:01.000 --> 00:00:02.000'): skipped, not spoken."""
+    if "-->" not in line:
+        return False
+    left, right = line.split("-->", 1)
+    left, right = left.strip(), right.split()
+    return left[:1].isdigit() and ":" in left and bool(right) and bool(_STAMP.match(right[0]))
 
 
 def parse_vtt(vtt: str) -> list[Cue]:
@@ -38,7 +41,7 @@ def parse_vtt(vtt: str) -> list[Cue]:
     so a line equal to the last kept line is skipped. Inline word timings are
     stripped and HTML entities decoded (`&gt;&gt;`, the speaker-change mark,
     becomes `>>`). Everything before the first timing line is the file header;
-    a number is a cue id only when a timing line follows it — so spoken
+    a number is a cue id only when a timing line is the very next line — so spoken
     "Language: …" or "2024" lines are kept."""
     lines = vtt.splitlines()
     cues: list[Cue] = []
@@ -51,15 +54,19 @@ def parse_vtt(vtt: str) -> list[Cue]:
             continue
         if _is_timing(line):
             started = True
-            try:
-                start = _seconds(line.split("-->", 1)[0].split()[0])
-            except ValueError:  # malformed: keep the previous start
-                pass
+            start = _seconds(line.split("-->", 1)[0])
             continue
-        if not started or _NOTE.match(line):
+        if _is_malformed_timing(line):  # keep the previous start
+            started = True
             continue
-        if line.isdigit() and _next_is_timing(lines, index):
+        if not started:
             continue
+        if _NOTE.match(line) and not lines[index - 1].strip():
+            continue  # a NOTE block starts after a blank line; cue text never does
+        if line.isdigit() and index + 1 < len(lines) and (
+                _is_timing(lines[index + 1].strip())
+                or _is_malformed_timing(lines[index + 1].strip())):
+            continue  # a cue id: the very next line is its timing
         line = html.unescape(_TAG.sub("", line)).strip()
         if not line or line == last:
             continue
