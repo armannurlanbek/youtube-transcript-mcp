@@ -36,8 +36,13 @@ class KeyGate:
         self.key = key.encode()
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] != "http":
+        if scope["type"] == "lifespan":
             await self.app(scope, receive, send)
+            return
+        if scope["type"] != "http":
+            if scope["type"] == "websocket":
+                await receive()  # the connect message
+                await send({"type": "websocket.close", "code": 1008})
             return
 
         async def send_with_headers(message: dict) -> None:
@@ -51,6 +56,8 @@ class KeyGate:
         if not hmac.compare_digest(segment.encode(), self.key):
             await Response(status_code=404)(scope, receive, send_with_headers)
             return
+        if scope["path"] == f"/{self.key.decode()}":  # serve it as /<key>/, never redirect
+            scope = {**scope, "path": scope["path"] + "/", "raw_path": scope.get("raw_path", b"") + b"/"}
         await self.app(scope, receive, send_with_headers)
 
 
@@ -77,4 +84,7 @@ def build_app(settings: Settings, *, transcriber: Transcriber | None = None) -> 
             yield
 
     inner = Starlette(routes=[Mount(f"/{settings.secret_key}", app=sub)], lifespan=lifespan)
+    # A redirect would carry the key in a Location header (http:// behind a TLS tunnel).
+    inner.router.redirect_slashes = False
+    sub.router.redirect_slashes = False
     return KeyGate(inner, settings.secret_key)

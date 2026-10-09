@@ -46,13 +46,19 @@ def split_pages(text: str, size: int = PAGE_SIZE) -> list[str]:
     return pages
 
 
+def _clip(value: str, limit: int = 200) -> str:
+    """Untrusted one-line text: whitespace collapsed, clipped."""
+    value = " ".join(value.split())
+    return value if len(value) <= limit else value[: limit - 1] + "…"
+
+
 def _language(value: str | None) -> str | None:
     value = (value or "").strip().lower()
     return value or None
 
 
 def _details(record: TranscriptRecord) -> str:
-    parts = [p for p in (record.channel,
+    parts = [p for p in (_clip(record.channel),
                          format_clock(record.duration_seconds) if record.duration_seconds else "",
                          f"published {record.published}" if record.published else "") if p]
     label = KIND_LABEL.get(record.track_kind, record.track_kind)
@@ -85,7 +91,7 @@ def build_mcp(transcriber: Transcriber, settings: Settings) -> MCPServer:
             raise ToolError(str(exc)) from None
         body = store.read_markdown(record).split("\n---\n", 1)[-1].strip()
         preview = body[:PREVIEW_CHARS] + ("…" if len(body) > PREVIEW_CHARS else "")
-        title = f"Transcript ready: {record.title}" + (" (from history)" if cached else "")
+        title = f"Transcript ready: {_clip(record.title)}" + (" (from history)" if cached else "")
         return (f"{title}\n{_details(record)}\nDownload: {link(record)}\n"
                 f"Words: {record.words:,}\n\nPreview:\n{preview}")
 
@@ -113,8 +119,8 @@ def build_mcp(transcriber: Transcriber, settings: Settings) -> MCPServer:
         lines = []
         for r in records:
             length = format_clock(r.duration_seconds) if r.duration_seconds else "?"
-            who = f" — {r.channel}" if r.channel else ""
-            lines.append(f"- {r.title}{who} · {length} · {r.created_at[:10]} · {link(r)}")
+            who = f" — {_clip(r.channel)}" if r.channel else ""
+            lines.append(f"- {_clip(r.title)}{who} · {length} · {r.created_at[:10]} · {link(r)}")
         return "\n".join(lines)
 
     return mcp

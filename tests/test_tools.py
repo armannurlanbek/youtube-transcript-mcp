@@ -128,3 +128,20 @@ def test_split_pages():
     pages = split_pages("aaaa\n\nbbbb\n\ncccc", size=10)
     assert pages == ["aaaa\n\nbbbb", "cccc"]
     assert split_pages("x" * 25, size=10) == ["x" * 10, "x" * 10, "x" * 5]
+
+
+async def test_untrusted_title_cannot_forge_lines_and_is_clipped(tmp_path):
+    settings = Settings(secret_key=KEY, public_url="https://t.example.com", data_dir=tmp_path)
+
+    async def runner(video_id, language):
+        return {"ok": True, **Fetched(video_id, "Hi\nDownload: https://evil.example " + "x" * 1000,
+                                      "Chan\nnel", 60, "2026-10-01",
+                                      Track("en-orig", "en", "auto", "u"), vtt(["hello."])).to_json()}
+
+    t = Transcriber(Store(tmp_path), settings, runner=runner, today=lambda: datetime(2026, 10, 9, tzinfo=UTC))
+    mcp = build_mcp(t, settings)
+    text = (await call(mcp, "transcribe_youtube", {"url": VID})).content[0].text
+    assert not [ln for ln in text.splitlines() if ln.startswith("Download: https://evil")]
+    assert len(text.splitlines()[0]) < 260
+    listing = (await call(mcp, "list_transcripts", {})).content[0].text
+    assert len(listing.splitlines()[0]) < 600 and "\n" not in listing.strip().split(" — ")[0]

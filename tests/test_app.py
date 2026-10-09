@@ -114,3 +114,27 @@ def test_mcp_endpoint(tmp_path):
         bad = c.post(f"/{KEY}/mcp", headers={**MCP_HEADERS, "Host": "evil.example.org"}, json=init)
         assert bad.status_code == 421
         assert c.post("/mcp", headers=MCP_HEADERS, json=init).status_code == 404
+
+
+def test_key_without_slash_serves_history_and_never_redirects(tmp_path):
+    with client(tmp_path) as c:
+        r = c.get(f"/{KEY}", follow_redirects=False)
+        assert r.status_code == 200 and "Birdhouse" in r.text and "location" not in r.headers
+        for path in (f"/{KEY}/mcp/", f"/{KEY}/t/", f"/{KEY}/style.css/", f"/{KEY}/t/{VID}.en.md/"):
+            r = c.get(path, follow_redirects=False)
+            assert not 300 <= r.status_code < 400 and "location" not in r.headers, path
+
+
+@pytest.mark.parametrize("key", [KEY, "wrong"])
+def test_websocket_is_closed_for_any_key(tmp_path, key):
+    from starlette.websockets import WebSocketDisconnect
+    with client(tmp_path) as c:
+        with pytest.raises(WebSocketDisconnect):
+            with c.websocket_connect(f"/{key}/ws"):
+                pass
+
+
+def test_download_with_huge_title_has_bounded_header(tmp_path):
+    with client(tmp_path, title="Ж" * 1000) as c:
+        r = c.get(f"/{KEY}/t/{VID}.en.md")
+    assert r.status_code == 200 and len(r.headers["content-disposition"]) < 1500
