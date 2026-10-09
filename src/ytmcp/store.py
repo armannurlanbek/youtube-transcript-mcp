@@ -71,11 +71,18 @@ class Store:
         return sqlite3.connect(self.db_path)
 
     def _one(self, where: str, params: tuple) -> TranscriptRecord | None:
+        """The newest matching record whose file still exists. A row whose file was
+        deleted by hand is dropped here, so the video can be transcribed again."""
         with self._connect() as conn:
-            row = conn.execute(
-                f"SELECT {_COLUMNS} FROM transcripts WHERE {where} ORDER BY created_at DESC, id DESC LIMIT 1",
-                params).fetchone()
-        return _record(row) if row else None
+            rows = conn.execute(
+                f"SELECT id, {_COLUMNS} FROM transcripts WHERE {where} ORDER BY created_at DESC, id DESC",
+                params).fetchall()
+            for row_id, *values in rows:
+                record = _record(tuple(values))
+                if (self.files / record.file_name).is_file():
+                    return record
+                conn.execute("DELETE FROM transcripts WHERE id = ?", (row_id,))
+        return None
 
     def find(self, video_id: str, language: str | None) -> TranscriptRecord | None:
         if language is None:

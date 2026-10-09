@@ -71,3 +71,35 @@ def test_by_file_name(tmp_path):
 def test_reopen_keeps_data(tmp_path):
     Store(tmp_path).save(fetched=fetched(), markdown="x", is_original=True, now=at(1))
     assert Store(tmp_path).find(VID, None) is not None
+
+
+def _rows(tmp_path):
+    import sqlite3
+    return sqlite3.connect(tmp_path / "transcripts.db").execute("SELECT COUNT(*) FROM transcripts").fetchone()[0]
+
+
+def test_missing_file_is_absent_and_row_is_cleaned(tmp_path):
+    store = Store(tmp_path)
+    rec = store.save(fetched=fetched(), markdown="x", is_original=True, now=at(1))
+    (tmp_path / "transcripts" / rec.file_name).unlink()
+    assert store.find(VID, None) is None
+    assert _rows(tmp_path) == 0
+
+
+def test_missing_file_latest_and_by_file_name_self_heal(tmp_path):
+    store = Store(tmp_path)
+    rec = store.save(fetched=fetched(), markdown="x", is_original=True, now=at(1))
+    (tmp_path / "transcripts" / rec.file_name).unlink()
+    assert store.latest(VID) is None and _rows(tmp_path) == 0
+    rec = store.save(fetched=fetched(), markdown="x", is_original=True, now=at(2))
+    (tmp_path / "transcripts" / rec.file_name).unlink()
+    assert store.by_file_name(rec.file_name) is None and _rows(tmp_path) == 0
+
+
+def test_lookup_falls_back_to_the_next_record_with_a_file(tmp_path):
+    store = Store(tmp_path)
+    store.save(fetched=fetched(language="en"), markdown="en", is_original=True, now=at(1))
+    ru = store.save(fetched=fetched(language="ru", kind="translated"), markdown="ru", is_original=False, now=at(2))
+    (tmp_path / "transcripts" / ru.file_name).unlink()
+    assert store.latest(VID).language == "en"
+    assert _rows(tmp_path) == 1

@@ -145,3 +145,33 @@ async def test_untrusted_title_cannot_forge_lines_and_is_clipped(tmp_path):
     assert len(text.splitlines()[0]) < 260
     listing = (await call(mcp, "list_transcripts", {})).content[0].text
     assert len(listing.splitlines()[0]) < 600 and "\n" not in listing.strip().split(" — ")[0]
+
+
+async def test_regional_language_hits_the_cache(tmp_path):
+    mcp, calls = make(tmp_path)
+    first = (await call(mcp, "transcribe_youtube", {"url": VID, "language": "en-US"})).content[0].text
+    second = (await call(mcp, "transcribe_youtube", {"url": VID, "language": "en-US"})).content[0].text
+    assert calls == [(VID, "en")]
+    assert "(from history)" in second and "(from history)" not in first
+
+
+async def test_regional_code_is_reduced_to_base(tmp_path):
+    mcp, calls = make(tmp_path)
+    await call(mcp, "transcribe_youtube", {"url": VID, "language": "pt-BR"})
+    assert calls == [(VID, "pt")]
+
+
+@pytest.mark.parametrize("bad", ["../x", "-", "english", "en_US", "e", "en-"])
+async def test_bad_language_is_tool_error(tmp_path, bad):
+    mcp, calls = make(tmp_path)
+    r = await call(mcp, "transcribe_youtube", {"url": VID, "language": bad})
+    assert r.is_error is True and "language must be a code like en or pt-BR" in r.content[0].text
+    assert calls == []
+
+
+async def test_read_transcript_after_file_deleted_is_not_found(tmp_path):
+    mcp, _ = make(tmp_path)
+    await call(mcp, "transcribe_youtube", {"url": VID})
+    (tmp_path / "transcripts" / f"{VID}.en.md").unlink()
+    r = await call(mcp, "read_transcript", {"video": VID})
+    assert r.is_error is True and "transcribe_youtube" in r.content[0].text

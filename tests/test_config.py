@@ -14,15 +14,17 @@ def test_minimal_env():
     assert s.public_host == "transcripts.example.com"
     assert s.base_url == f"https://transcripts.example.com/{KEY}"
     assert (s.host, s.port, s.data_dir, s.cookies, s.fetch_timeout) == (
-        "127.0.0.1", 8090, Path("data"), None, 200.0)
+        "127.0.0.1", 8090, Path("data"), None, 60.0)
+    assert s.lock_wait == 25.0
 
 
 def test_all_knobs():
     s = load_settings({"YTM_SECRET_KEY": KEY, "YTM_PUBLIC_URL": "http://localhost:8090",
                        "YTM_HOST": "0.0.0.0", "YTM_PORT": "9000", "YTM_DATA_DIR": "/tmp/x",
-                       "YTM_COOKIES": " /c.txt ", "YTM_FETCH_TIMEOUT": "60"})
+                       "YTM_COOKIES": " /c.txt ", "YTM_FETCH_TIMEOUT": "50", "YTM_LOCK_WAIT": "10"})
     assert (s.host, s.port, s.data_dir, s.cookies, s.fetch_timeout) == (
-        "0.0.0.0", 9000, Path("/tmp/x"), "/c.txt", 60.0)
+        "0.0.0.0", 9000, Path("/tmp/x"), "/c.txt", 50.0)
+    assert s.lock_wait == 10.0
     assert s.public_host == "localhost:8090"
 
 
@@ -34,6 +36,29 @@ def test_bad_key(key):
 
 @pytest.mark.parametrize("url", ["", "transcripts.example.com", "ftp://a.example.com"])
 def test_bad_public_url(url):
+    with pytest.raises(ConfigError, match="YTM_PUBLIC_URL"):
+        load_settings({"YTM_SECRET_KEY": KEY, "YTM_PUBLIC_URL": url})
+
+
+@pytest.mark.parametrize("extra", [
+    {"YTM_FETCH_TIMEOUT": "80", "YTM_LOCK_WAIT": "20"},  # 100 s > 95 s
+    {"YTM_FETCH_TIMEOUT": "0"}, {"YTM_FETCH_TIMEOUT": "-5"},
+    {"YTM_LOCK_WAIT": "0"}, {"YTM_LOCK_WAIT": "-1"},
+])
+def test_timeouts_must_fit_the_proxy_limit(extra):
+    with pytest.raises(ConfigError, match="YTM_"):
+        load_settings({"YTM_SECRET_KEY": KEY, "YTM_PUBLIC_URL": "https://a.example.com", **extra})
+
+
+def test_timeouts_at_the_limit_are_fine():
+    s = load_settings({"YTM_SECRET_KEY": KEY, "YTM_PUBLIC_URL": "https://a.example.com",
+                       "YTM_FETCH_TIMEOUT": "70", "YTM_LOCK_WAIT": "25"})
+    assert (s.fetch_timeout, s.lock_wait) == (70.0, 25.0)
+
+
+@pytest.mark.parametrize("url", ["https://h.example.com/sub", "https://h.example.com/?a=1",
+                                 "https://h.example.com/#frag", "https://h.example.com?x"])
+def test_public_url_must_be_origin_only(url):
     with pytest.raises(ConfigError, match="YTM_PUBLIC_URL"):
         load_settings({"YTM_SECRET_KEY": KEY, "YTM_PUBLIC_URL": url})
 

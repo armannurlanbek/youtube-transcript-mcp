@@ -138,3 +138,10 @@ def test_download_with_huge_title_has_bounded_header(tmp_path):
     with client(tmp_path, title="Ж" * 1000) as c:
         r = c.get(f"/{KEY}/t/{VID}.en.md")
     assert r.status_code == 200 and len(r.headers["content-disposition"]) < 1500
+
+
+def test_download_of_a_deleted_file_is_404(tmp_path):
+    with client(tmp_path) as c:
+        (tmp_path / "transcripts" / f"{VID}.en.md").unlink()
+        assert c.get(f"/{KEY}/t/{VID}.en.md").status_code == 404
+        assert "Birdhouse" not in c.get(f"/{KEY}/").text

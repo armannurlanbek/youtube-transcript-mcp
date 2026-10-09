@@ -97,11 +97,15 @@ def web_routes(store: Store, settings: Settings) -> list[Route]:
         record = store.by_file_name(request.path_params["file_name"])
         if record is None:
             return Response(status_code=404)
+        try:
+            text = store.read_markdown(record)
+        except FileNotFoundError:  # deleted between the lookup and the read
+            return Response(status_code=404)
         name = download_name(record.title, record.video_id)
         title = " ".join(record.title.split())[:200] or record.video_id
         utf8_name = quote(f"{title}.md", safe="", errors="replace")
         return Response(
-            store.read_markdown(record), media_type="text/markdown; charset=utf-8",
+            text, media_type="text/markdown; charset=utf-8",
             headers={"Content-Disposition": f"attachment; filename=\"{name}\"; filename*=UTF-8''{utf8_name}",
                      "Cache-Control": "no-store"})
 

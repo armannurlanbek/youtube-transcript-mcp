@@ -204,3 +204,18 @@ async def test_malformed_ok_result_is_failed_and_releases_lock(tmp_path):
         await t.transcribe(VID, None)
     assert e.value.kind == "failed"
     assert not t._lock.locked()
+
+
+async def test_deleted_file_is_refetched(tmp_path):
+    calls = []
+
+    async def runner(video_id, language):
+        calls.append(1)
+        return ok_result()
+
+    t = make(tmp_path, runner)
+    rec, _ = await t.transcribe(VID, None)
+    (t.store.files / rec.file_name).unlink()
+    rec2, cached = await t.transcribe(VID, None)
+    assert cached is False and len(calls) == 2
+    assert t.store.read_markdown(rec2)

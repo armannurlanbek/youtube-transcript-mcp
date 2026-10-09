@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 
@@ -10,7 +12,7 @@ from ytmcp.errors import TranscriptError
 from ytmcp.render import KIND_LABEL, format_clock
 from ytmcp.service import Transcriber
 from ytmcp.store import TranscriptRecord
-from ytmcp.youtube import video_id_from_url
+from ytmcp.youtube import base_language, video_id_from_url
 
 PAGE_SIZE = 100_000
 PREVIEW_CHARS = 600
@@ -52,9 +54,17 @@ def _clip(value: str, limit: int = 200) -> str:
     return value if len(value) <= limit else value[: limit - 1] + "…"
 
 
+_LANGUAGE = re.compile(r"[A-Za-z]{2,3}(-[A-Za-z0-9]{1,8})*")
+
+
 def _language(value: str | None) -> str | None:
-    value = (value or "").strip().lower()
-    return value or None
+    """A language code reduced to its base ("en-US" -> "en"), the key rows are stored under."""
+    value = (value or "").strip()
+    if not value:
+        return None
+    if not _LANGUAGE.fullmatch(value):
+        raise ToolError("language must be a code like en or pt-BR")
+    return base_language(value)
 
 
 def _details(record: TranscriptRecord) -> str:

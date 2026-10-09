@@ -12,6 +12,11 @@ from urllib.parse import urlparse
 _KEY = re.compile(r"[A-Za-z0-9_-]{32,}")
 
 
+# Cloudflare's edge answers 524 when the origin sends nothing for ~100 s, and a
+# tool result sends nothing until it is finished: the worst wait must stay below.
+MAX_TOTAL_WAIT = 95.0
+
+
 class ConfigError(Exception):
     pass
 
@@ -24,8 +29,8 @@ class Settings:
     port: int = 8090
     data_dir: Path = Path("data")
     cookies: str | None = None
-    fetch_timeout: float = 200.0
-    lock_wait: float = 30.0
+    fetch_timeout: float = 60.0
+    lock_wait: float = 25.0
 
     @property
     def public_host(self) -> str:
@@ -36,6 +41,17 @@ class Settings:
         return f"{self.public_url}/{self.secret_key}"
 
 
+def _seconds(env: Mapping[str, str], name: str, default: float) -> float:
+    raw = env.get(name, "").strip()
+    try:
+        value = float(raw) if raw else default
+    except ValueError:
+        raise ConfigError(f"{name} must be a number of seconds") from None
+    if not value > 0:
+        raise ConfigError(f"{name} must be greater than 0")
+    return value
+
+
 def load_settings(env: Mapping[str, str]) -> Settings:
     key = env.get("YTM_SECRET_KEY", "").strip()
     if not _KEY.fullmatch(key):
@@ -44,6 +60,13 @@ def load_settings(env: Mapping[str, str]) -> Settings:
     parsed = urlparse(public_url)
     if parsed.scheme not in ("http", "https") or not parsed.netloc:
         raise ConfigError("YTM_PUBLIC_URL must be an http(s) URL, e.g. https://transcripts.example.com")
+    if parsed.path or parsed.query or parsed.fragment or parsed.params:
+        raise ConfigError("YTM_PUBLIC_URL must be only scheme and host (no path, query or fragment)")
+    fetch_timeout = _seconds(env, "YTM_FETCH_TIMEOUT", 60.0)
+    lock_wait = _seconds(env, "YTM_LOCK_WAIT", 25.0)
+    if fetch_timeout + lock_wait > MAX_TOTAL_WAIT:
+        raise ConfigError(f"YTM_FETCH_TIMEOUT + YTM_LOCK_WAIT must be at most {MAX_TOTAL_WAIT:g} seconds "
+                          "(proxies such as Cloudflare drop a silent request after about 100)")
     return Settings(
         secret_key=key,
         public_url=public_url,
@@ -51,7 +74,8 @@ def load_settings(env: Mapping[str, str]) -> Settings:
         port=int(env.get("YTM_PORT", "").strip() or 8090),
         data_dir=Path(env.get("YTM_DATA_DIR", "").strip() or "data"),
         cookies=env.get("YTM_COOKIES", "").strip() or None,
-        fetch_timeout=float(env.get("YTM_FETCH_TIMEOUT", "").strip() or 200),
+        fetch_timeout=fetch_timeout,
+        lock_wait=lock_wait,
     )
 
 
