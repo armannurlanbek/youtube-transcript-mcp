@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from urllib.parse import parse_qs, urlparse
 
 from ytmcp.errors import TranscriptError
@@ -124,3 +124,22 @@ def classify_error(message: str) -> str:
     if any(marker in low for marker in _UNAVAILABLE):
         return "unavailable"
     return "failed"
+
+
+@dataclass(frozen=True)
+class Fetched:
+    video_id: str
+    title: str
+    channel: str
+    duration_seconds: int | None
+    published: str | None  # YYYY-MM-DD
+    track: Track
+    vtt: str
+
+    def to_json(self) -> dict:
+        return asdict(self)
+
+    @classmethod
+    def from_json(cls, data: dict) -> "Fetched":
+        fields = {k: data[k] for k in ("video_id", "title", "channel", "duration_seconds", "published", "vtt")}
+        return cls(track=Track(**data["track"]), **fields)
