@@ -191,7 +191,9 @@ def fetch_captions(video_id: str, language: str | None, *, cookiefile: str | Non
     except Exception as exc:  # noqa: BLE001 - yt-dlp raises many types; the message decides
         detail = str(exc)
         if cookiefile:  # an OSError from the cookie save carries the filename
-            detail = detail.replace(cookiefile, "<cookies>")
+            # str(OSError) shows the filename via repr(): backslashes doubled, quotes escaped
+            for form in sorted({cookiefile, repr(cookiefile)[1:-1]}, key=len, reverse=True):
+                detail = detail.replace(form, "<cookies>")
         raise TranscriptError(classify_error(detail), detail) from exc
     duration = info.get("duration")
     return Fetched(

@@ -169,3 +169,35 @@ def test_main_passes_cookie_env(capsys, monkeypatch, env, expected):
         raise TranscriptError("no_captions")
     worker.main([VID, "-"], fetch=fetch)
     assert seen["cookiefile"] == expected
+
+
+def test_escaped_cookie_path_is_scrubbed():
+    path = "C:\\secret\\cookies.txt"
+    err = OSError(13, "Permission denied", path)
+    assert "C:\\\\secret" in str(err)  # the OS shows the repr form: doubled backslashes
+    with pytest.raises(TranscriptError) as e:
+        fetch_captions(VID, None, cookiefile=path, ydl_factory=lambda o: FakeYDL(o, error=err))
+    assert path not in e.value.detail and "C:\\\\secret" not in e.value.detail
+    assert "<cookies>" in e.value.detail
+
+    def fetch(video_id, language, *, cookiefile):
+        return fetch_captions(video_id, language, cookiefile=cookiefile,
+                              ydl_factory=lambda o: FakeYDL(o, error=err))
+    dumped = json.dumps(worker.run([VID, "-"], fetch=fetch, cookiefile=path))
+    assert "secret" not in dumped and "<cookies>" in dumped
+
+
+def test_main_keeps_fd1_clean_from_child_processes():
+    code = (
+        "import subprocess\n"
+        "from ytmcp import worker\n"
+        "def f(v, l, *, cookiefile):\n"
+        "    subprocess.run(['echo', 'fd-noise'])\n"
+        "    raise RuntimeError('x')\n"
+        f"worker.main({VID!r}.split() + ['-'], fetch=f)\n"
+    )
+    proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=60)
+    assert proc.returncode == 0
+    assert proc.stdout.count("\n") == 1
+    assert json.loads(proc.stdout)["kind"] == "failed"
+    assert "fd-noise" in proc.stderr

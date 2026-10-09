@@ -30,8 +30,18 @@ def run(argv: list[str], *, fetch=fetch_captions, cookiefile: str | None = None)
 def main(argv: list[str] | None = None, *, fetch=fetch_captions) -> None:
     args = sys.argv[1:] if argv is None else argv
     # Anything yt-dlp prints must not corrupt the one JSON line on stdout.
-    with contextlib.redirect_stdout(sys.stderr):
-        result = run(args, fetch=fetch, cookiefile=os.environ.get("YTM_COOKIES") or None)
+    # redirect_stdout covers Python writes; dup2 also covers helper processes
+    # (yt-dlp runs deno) that write to file descriptor 1.
+    sys.stdout.flush()
+    saved = os.dup(1)
+    os.dup2(2, 1)
+    try:
+        with contextlib.redirect_stdout(sys.stderr):
+            result = run(args, fetch=fetch, cookiefile=os.environ.get("YTM_COOKIES") or None)
+    finally:
+        sys.stderr.flush()
+        os.dup2(saved, 1)
+        os.close(saved)
     sys.stdout.write(json.dumps(result) + "\n")
 
 
