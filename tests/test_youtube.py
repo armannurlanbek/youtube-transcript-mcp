@@ -77,8 +77,13 @@ def test_original_auto_in_video_language_without_orig():
 
 
 def test_original_unknown_language_single_manual():
-    t = choose_track(info(None, manual=["es"], auto=["en-orig", "en"]), None)
+    t = choose_track(info(None, manual=["es"], auto=["en"]), None)
     assert (t.code, t.kind) == ("es", "manual")
+
+
+def test_original_lone_orig_track_names_the_spoken_language():
+    t = choose_track(info(None, manual=["es"], auto=["en-orig", "en"]), None)
+    assert (t.code, t.kind) == ("en-orig", "auto")
 
 
 def test_original_unknown_language_several_manual_uses_orig():
@@ -151,3 +156,51 @@ def test_spoken_language_without_orig_track_is_auto():
 def test_unknown_spoken_language_keeps_auto():
     t = choose_track(info(None, auto=["ru"]), "ru")
     assert (t.code, t.kind) == ("ru", "auto")
+
+
+def dubbed_info(**extra):
+    data = info("ar", auto=["ab", "ar-orig", "ar", "bn-orig", "en-orig", "en", "ru-orig", "ru"])
+    data["formats"] = [
+        {"acodec": "mp4a.40.2", "vcodec": "none", "language": "de-DE", "language_preference": -1,
+         "format_note": "German (DE), low"},
+        {"acodec": "mp4a.40.2", "vcodec": "none", "language": "en-US", "language_preference": 10,
+         "format_note": "English (US) original (default), low, DRC"},
+    ]
+    data.update(extra)
+    return data
+
+
+def test_dubbed_video_takes_spoken_language_from_original_audio():
+    t = choose_track(dubbed_info(), None)
+    assert (t.code, t.language, t.kind) == ("en-orig", "en", "auto")
+
+
+def test_dubbed_video_requested_other_language_is_translated():
+    t = choose_track(dubbed_info(), "ru")
+    assert (t.code, t.language, t.kind) == ("ru-orig", "ru", "translated")
+
+
+def test_dubbed_video_requested_spoken_language_is_auto():
+    t = choose_track(dubbed_info(), "en")
+    assert (t.code, t.language, t.kind) == ("en-orig", "en", "auto")
+
+
+def test_several_orig_tracks_and_no_spoken_language_use_the_first():
+    t = choose_track(info(None, auto=["bn-orig", "en-orig"]), None)
+    assert t.code == "bn-orig"
+
+
+def test_language_preference_beats_info_language_without_original_note():
+    data = info("ar", auto=["ar-orig", "fr-orig"])
+    data["formats"] = [
+        {"acodec": "mp4a.40.2", "language": "ar", "language_preference": -1, "format_note": "Arabic"},
+        {"acodec": "mp4a.40.2", "language": "fr-FR", "language_preference": 10, "format_note": "default"},
+    ]
+    assert choose_track(data, None).code == "fr-orig"
+
+
+def test_video_only_formats_are_ignored():
+    data = info("ar", auto=["ar-orig", "en-orig"])
+    data["formats"] = [{"acodec": "none", "vcodec": "avc1", "language": "en-US", "language_preference": 10,
+                        "format_note": "English (US) original (default)"}]
+    assert choose_track(data, None).code == "ar-orig"

@@ -73,40 +73,54 @@ def _pick(tracks: dict[str, str], language: str) -> str | None:
     return next((code for code in tracks if base_language(code) == language), None)
 
 
+def _spoken_language(info: dict, orig_codes: list[str]) -> str | None:
+    """The spoken language: original audio track, else the video's, else the lone -orig track."""
+    audio = [f for f in info.get("formats") or []
+             if f.get("acodec") not in (None, "none") and f.get("language")]
+    for fmt in audio:
+        if "original" in (fmt.get("format_note") or "").lower():
+            return base_language(fmt["language"])
+    preferred = max(audio, key=lambda f: f.get("language_preference") or 0, default=None)
+    if preferred and (preferred.get("language_preference") or 0) > 0:
+        return base_language(preferred["language"])
+    if info.get("language"):
+        return base_language(info["language"])
+    if len(orig_codes) == 1:
+        return base_language(orig_codes[0])
+    return None
+
+
 def choose_track(info: dict, language: str | None) -> Track:
     manual = _vtt_tracks(info.get("subtitles"))
     auto = _vtt_tracks(info.get("automatic_captions"))
-    orig = next((code for code in auto if code.endswith("-orig")), None)
+    orig_codes = [code for code in auto if code.endswith("-orig")]
     language = (language or "").strip() or None
-    if orig:
-        spoken = base_language(orig)
-    else:
-        spoken = base_language(info["language"]) if info.get("language") else None
+    spoken = _spoken_language(info, orig_codes)
 
     def track(code: str, kind: str, source: dict[str, str]) -> Track:
         return Track(code=code, language=base_language(code), kind=kind, url=source[code])
 
+    def orig_of(lang: str) -> str | None:
+        return next((code for code in orig_codes if base_language(code) == lang), None)
+
     if language is None:
-        video_lang = base_language(info["language"]) if info.get("language") else None
-        if video_lang:
-            if code := _pick(manual, video_lang):
+        if spoken:
+            if code := _pick(manual, spoken):
                 return track(code, "manual", manual)
-            if orig:
-                return track(orig, "auto", auto)
-            if code := _pick(auto, video_lang):
+            if code := orig_of(spoken) or _pick(auto, spoken):
                 return track(code, "auto", auto)
         else:
             if len(manual) == 1:
                 return track(next(iter(manual)), "manual", manual)
-            if orig:
-                return track(orig, "auto", auto)
+            if orig_codes:
+                return track(orig_codes[0], "auto", auto)
         raise TranscriptError("no_captions")
 
     wanted = base_language(language)
     if code := _pick(manual, wanted):
         return track(code, "manual", manual)
-    if orig and spoken == wanted:
-        return track(orig, "auto", auto)
+    if code := orig_of(wanted):
+        return track(code, "auto" if wanted == spoken else "translated", auto)
     if code := _pick(auto, wanted):
         return track(code, "auto" if spoken in (None, wanted) else "translated", auto)
     available = sorted({base_language(c) for c in manual} | ({spoken} if spoken else set()))
