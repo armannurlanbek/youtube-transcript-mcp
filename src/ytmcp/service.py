@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import signal
 import sys
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
@@ -24,19 +25,40 @@ async def subprocess_runner(video_id: str, language: str | None, *, timeout: flo
     """Run the worker as a child process; kill it if it passes the deadline."""
     argv = (command or [sys.executable, "-m", "ytmcp.worker"]) + [video_id, language or "-"]
     env = {**os.environ, "YTM_COOKIES": cookies or ""}
-    proc = await asyncio.create_subprocess_exec(
-        *argv, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env=env)
     try:
-        out, err = await asyncio.wait_for(proc.communicate(), timeout)
-    except TimeoutError:
-        proc.kill()
-        await proc.wait()
-        raise TranscriptError("timeout") from None
+        proc = await asyncio.create_subprocess_exec(
+            *argv, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env=env,
+            start_new_session=True)
+    except OSError as exc:
+        raise TranscriptError("failed", str(exc)) from None
     try:
-        return json.loads(out.decode("utf-8", errors="replace").strip().splitlines()[-1])
-    except (ValueError, IndexError):
-        tail = err.decode("utf-8", errors="replace").strip()[-300:]
-        raise TranscriptError("failed", tail or f"worker exited with code {proc.returncode}") from None
+        try:
+            out, err = await asyncio.wait_for(proc.communicate(), timeout)
+        except TimeoutError:
+            raise TranscriptError("timeout") from None
+        try:
+            parsed = json.loads(out.decode("utf-8", errors="replace").strip().splitlines()[-1])
+        except (ValueError, IndexError):
+            parsed = None
+        if not isinstance(parsed, dict):
+            tail = err.decode("utf-8", errors="replace").strip()[-300:]
+            raise TranscriptError("failed", tail or f"worker exited with code {proc.returncode}")
+        return parsed
+    finally:
+        if proc.returncode is None:
+            _kill_group(proc)
+            await asyncio.shield(proc.wait())
+
+
+def _kill_group(proc: asyncio.subprocess.Process) -> None:
+    """Kill the child and any helpers it started (it leads its own process group)."""
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        try:
+            proc.kill()
+        except ProcessLookupError:
+            pass
 
 
 class Transcriber:
@@ -64,7 +86,10 @@ class Transcriber:
             if not result.get("ok"):
                 raise TranscriptError(str(result.get("kind") or "failed"), str(result.get("detail") or ""))
             result = {k: v for k, v in result.items() if k != "ok"}
-            fetched = Fetched.from_json(result)
+            try:
+                fetched = Fetched.from_json(result)
+            except (KeyError, TypeError, ValueError):
+                raise TranscriptError("failed", "malformed worker output") from None
             cues = parse_vtt(fetched.vtt)
             if not cues:
                 raise TranscriptError("no_captions")
