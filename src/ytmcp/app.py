@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import hmac
 from collections.abc import AsyncIterator
+from urllib.parse import urlparse
 
 from mcp.server.transport_security import TransportSecuritySettings
 from starlette.applications import Starlette
@@ -56,8 +57,11 @@ class KeyGate:
         if not hmac.compare_digest(segment.encode(), self.key):
             await Response(status_code=404)(scope, receive, send_with_headers)
             return
-        if scope["path"] == f"/{self.key.decode()}":  # serve it as /<key>/, never redirect
+        own = f"/{self.key.decode()}"
+        if scope["path"] == own:  # serve it as /<key>/, never redirect
             scope = {**scope, "path": scope["path"] + "/", "raw_path": scope.get("raw_path", b"") + b"/"}
+        elif scope["path"] == f"{own}/mcp/":  # connectors may add the slash; serve /mcp
+            scope = {**scope, "path": scope["path"][:-1], "raw_path": scope.get("raw_path", b"").rstrip(b"/")}
         await self.app(scope, receive, send_with_headers)
 
 
@@ -65,6 +69,10 @@ def build_app(settings: Settings, *, transcriber: Transcriber | None = None) -> 
     transcriber = transcriber or Transcriber(Store(settings.data_dir), settings)
     mcp = build_mcp(transcriber, settings)
     host = settings.public_host
+    origins = [settings.public_url, "https://claude.ai", "https://claude.com"]
+    if urlparse(settings.public_url).hostname in ("localhost", "127.0.0.1"):
+        # Local testing with MCP Inspector, which sends its own page's Origin.
+        origins += ["http://localhost:*", "http://127.0.0.1:*"]
     sub = mcp.streamable_http_app(
         streamable_http_path="/mcp",
         stateless_http=True,
@@ -72,7 +80,7 @@ def build_app(settings: Settings, *, transcriber: Transcriber | None = None) -> 
         transport_security=TransportSecuritySettings(
             enable_dns_rebinding_protection=True,
             allowed_hosts=[host, f"{host}:*", "127.0.0.1:*", "localhost:*"],
-            allowed_origins=[settings.public_url, "https://claude.ai", "https://claude.com"],
+            allowed_origins=origins,
         ),
     )
     sub.router.routes.extend(web_routes(transcriber.store, settings))

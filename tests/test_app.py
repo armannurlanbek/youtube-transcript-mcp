@@ -120,7 +120,7 @@ def test_key_without_slash_serves_history_and_never_redirects(tmp_path):
     with client(tmp_path) as c:
         r = c.get(f"/{KEY}", follow_redirects=False)
         assert r.status_code == 200 and "Birdhouse" in r.text and "location" not in r.headers
-        for path in (f"/{KEY}/mcp/", f"/{KEY}/t/", f"/{KEY}/style.css/", f"/{KEY}/t/{VID}.en.md/"):
+        for path in (f"/{KEY}/t/", f"/{KEY}/style.css/", f"/{KEY}/t/{VID}.en.md/"):
             r = c.get(path, follow_redirects=False)
             assert not 300 <= r.status_code < 400 and "location" not in r.headers, path
 
@@ -145,3 +145,40 @@ def test_download_of_a_deleted_file_is_404(tmp_path):
         (tmp_path / "transcripts" / f"{VID}.en.md").unlink()
         assert c.get(f"/{KEY}/t/{VID}.en.md").status_code == 404
         assert "Birdhouse" not in c.get(f"/{KEY}/").text
+
+
+INIT = {"jsonrpc": "2.0", "id": 1, "method": "initialize",
+        "params": {"protocolVersion": "2025-11-25", "capabilities": {}, "clientInfo": {"name": "t", "version": "0"}}}
+
+
+def test_mcp_trailing_slash_works_without_redirect(tmp_path):
+    with client(tmp_path) as c:
+        r = c.post(f"/{KEY}/mcp/", headers=MCP_HEADERS, json=INIT, follow_redirects=False)
+    assert r.status_code == 200 and "youtube-transcripts" in r.text and "location" not in r.headers
+
+
+@pytest.mark.parametrize("origin,status", [
+    (None, 200), ("https://claude.ai", 200), ("https://claude.com", 200),
+    (f"https://{HOST}", 200), ("https://evil.example", 403),
+])
+def test_origin_allowlist(tmp_path, origin, status):
+    headers = {**MCP_HEADERS, **({"Origin": origin} if origin else {})}
+    with client(tmp_path) as c:
+        assert c.post(f"/{KEY}/mcp", headers=headers, json=INIT).status_code == status
+
+
+def test_wrong_key_with_bad_host_is_404_gate_first(tmp_path):
+    with client(tmp_path) as c:
+        r = c.post("/wrong/mcp", headers={**MCP_HEADERS, "Host": "evil.example.org",
+                                          "Origin": "https://evil.example"}, json=INIT)
+    assert r.status_code == 404 and r.content == b""
+
+
+def test_localhost_origin_only_when_public_url_is_local(tmp_path):
+    local = Settings(secret_key=KEY, public_url="http://localhost:8090", data_dir=tmp_path)
+    headers = {**MCP_HEADERS, "Host": "localhost:8090", "Origin": "http://localhost:6274"}
+    with TestClient(build_app(local), base_url="http://localhost:8090") as c:
+        assert c.post(f"/{KEY}/mcp", headers=headers, json=INIT).status_code == 200
+    with client(tmp_path) as c:  # public deployment: a local page is not trusted
+        r = c.post(f"/{KEY}/mcp", headers={**MCP_HEADERS, "Origin": "http://localhost:6274"}, json=INIT)
+    assert r.status_code == 403
