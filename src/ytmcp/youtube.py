@@ -77,7 +77,11 @@ def choose_track(info: dict, language: str | None) -> Track:
     manual = _vtt_tracks(info.get("subtitles"))
     auto = _vtt_tracks(info.get("automatic_captions"))
     orig = next((code for code in auto if code.endswith("-orig")), None)
-    spoken = base_language(orig) if orig else None
+    language = (language or "").strip() or None
+    if orig:
+        spoken = base_language(orig)
+    else:
+        spoken = base_language(info["language"]) if info.get("language") else None
 
     def track(code: str, kind: str, source: dict[str, str]) -> Track:
         return Track(code=code, language=base_language(code), kind=kind, url=source[code])
@@ -98,7 +102,7 @@ def choose_track(info: dict, language: str | None) -> Track:
                 return track(orig, "auto", auto)
         raise TranscriptError("no_captions")
 
-    wanted = base_language(language.strip())
+    wanted = base_language(language)
     if code := _pick(manual, wanted):
         return track(code, "manual", manual)
     if orig and spoken == wanted:

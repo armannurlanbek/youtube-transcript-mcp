@@ -130,3 +130,24 @@ def test_requested_language_missing_lists_available():
 ])
 def test_classify_error(message, kind):
     assert classify_error(message) == kind
+
+
+@pytest.mark.parametrize("blank", ["", "  "])
+def test_blank_language_means_original(blank):
+    t = choose_track(info("en", auto=["en-orig", "en"]), blank)
+    assert (t.code, t.kind) == ("en-orig", "auto")
+
+
+def test_translation_without_orig_track_is_labelled_translated():
+    t = choose_track(info("en", auto=["en", "ru"]), "ru")
+    assert (t.code, t.language, t.kind) == ("ru", "ru", "translated")
+
+
+def test_spoken_language_without_orig_track_is_auto():
+    t = choose_track(info("en", auto=["en", "ru"]), "en")
+    assert (t.code, t.kind) == ("en", "auto")
+
+
+def test_unknown_spoken_language_keeps_auto():
+    t = choose_track(info(None, auto=["ru"]), "ru")
+    assert (t.code, t.kind) == ("ru", "auto")
