@@ -64,8 +64,16 @@ def paragraphs(cues: list[Cue], *, soft: float = 45.0, hard: float = 90.0) -> li
     return out
 
 
+_MARKDOWN_SPECIAL = re.compile(r"([\\\[\]<>`])")
+
+
+def escape_markdown(text: str) -> str:
+    """Backslash-escape characters that could inject Markdown links, HTML or code."""
+    return _MARKDOWN_SPECIAL.sub(r"\\\1", text)
+
+
 def _one_line(text: str) -> str:
-    text = re.sub(r"\s+", " ", text).strip()
+    text = escape_markdown(re.sub(r"\s+", " ", text).strip())
     return "\\" + text if text.startswith("#") else text
 
 
@@ -84,5 +92,5 @@ def to_markdown(fetched: Fetched, cues: list[Cue], *, transcribed: date) -> str:
     lines.append(f"- **Transcribed:** {transcribed.isoformat()}")
     lines += ["", "---", ""]
     for p in paragraphs(cues):
-        lines += [f"[{format_clock(p.start)}]({watch_url(vid, p.start)}) {p.text}", ""]
+        lines += [f"[{format_clock(p.start)}]({watch_url(vid, p.start)}) {escape_markdown(p.text)}", ""]
     return "\n".join(lines).rstrip("\n") + "\n"

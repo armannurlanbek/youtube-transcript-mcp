@@ -1,6 +1,7 @@
+import json
 from datetime import date
 
-from ytmcp.render import Paragraph, format_clock, paragraphs, to_markdown, watch_url
+from ytmcp.render import Paragraph, escape_markdown, format_clock, paragraphs, to_markdown, watch_url
 from ytmcp.youtube import Fetched, Track
 
 VID = "aB3_-xYz012"
@@ -80,6 +81,29 @@ def test_to_markdown_missing_fields_and_odd_title():
     md = to_markdown(fetched(title="# Big\nNews <b>", channel="", duration_seconds=None, published=None,
                              track=Track("ru", "ru", "translated", "u")),
                      [(0.0, "x")], transcribed=date(2026, 10, 9))
-    assert md.startswith("# \\# Big News <b>\n\n")
+    assert md.startswith("# \\# Big News \\<b\\>\n\n")
     assert "Length" not in md and "Published" not in md and "Channel" not in md
     assert "- **Language:** ru (auto-translated captions)\n" in md
+
+
+def test_escape_markdown():
+    assert escape_markdown("a\\b `c` [d] <e> >f") == "a\\\\b \\`c\\` \\[d\\] \\<e\\> \\>f"
+
+
+def test_caption_markdown_and_html_are_escaped():
+    md = to_markdown(fetched(), [(0.0, "see [this](https://x.example) <img src=x>")], transcribed=date(2026, 10, 9))
+    assert "see \\[this\\](https://x.example) \\<img src=x\\>\n" in md
+
+
+def test_channel_is_escaped():
+    md = to_markdown(fetched(channel="A [b]"), [(0.0, "x")], transcribed=date(2026, 10, 9))
+    assert "- **Channel:** A \\[b\\]\n" in md
+
+
+def test_paragraphs_stay_unescaped():
+    assert paragraphs([(0.0, "a [b] <c> `d`")]) == [Paragraph(0.0, "a [b] <c> `d`")]
+
+
+def test_fetched_json_round_trip():
+    f = fetched(vtt="WEBVTT")
+    assert Fetched.from_json(json.loads(json.dumps(f.to_json()))) == f
