@@ -114,3 +114,58 @@ def test_worker_module_prints_one_json_line():
                           capture_output=True, text=True, timeout=60)
     assert proc.returncode == 0
     assert json.loads(proc.stdout) == {"ok": False, "kind": "invalid_url", "detail": "bad"}
+
+
+def test_cookie_path_never_leaks_in_error_detail():
+    path = "/secret/dir/cookies.txt"
+    err = OSError(f"[Errno 13] Permission denied: '{path}'")
+    with pytest.raises(TranscriptError) as e:
+        fetch_captions(VID, None, cookiefile=path, ydl_factory=lambda o: FakeYDL(o, error=err))
+    assert path not in e.value.detail and "<cookies>" in e.value.detail
+
+    def fetch(video_id, language, *, cookiefile):
+        return fetch_captions(video_id, language, cookiefile=cookiefile,
+                              ydl_factory=lambda o: FakeYDL(o, error=err))
+    out = worker.run([VID, "-"], fetch=fetch, cookiefile=path)
+    assert path not in json.dumps(out) and "<cookies>" in out["detail"]
+
+
+def test_fetch_captions_rejects_bad_video_id():
+    with pytest.raises(TranscriptError) as e:
+        fetch_captions("bad", None, ydl_factory=FakeYDL)
+    assert (e.value.kind, e.value.detail) == ("invalid_url", "bad")
+
+
+def test_main_prints_one_json_line_on_crash(capsys, monkeypatch):
+    monkeypatch.delenv("YTM_COOKIES", raising=False)
+
+    def crash(video_id, language, *, cookiefile):
+        raise RuntimeError("boom")
+    worker.main([VID, "-"], fetch=crash)
+    out = capsys.readouterr().out
+    assert out.count("\n") == 1
+    assert json.loads(out) == {"ok": False, "kind": "failed", "detail": "boom"}
+
+
+def test_main_keeps_stray_prints_off_stdout(capsys, monkeypatch):
+    monkeypatch.delenv("YTM_COOKIES", raising=False)
+
+    def noisy(video_id, language, *, cookiefile):
+        print("noise")
+        return Fetched(VID, "T", "C", 1, None, Track("en", "en", "manual", "u"), "vtt")
+    worker.main([VID, "-"], fetch=noisy)
+    captured = capsys.readouterr()
+    assert captured.out.count("\n") == 1 and json.loads(captured.out)["ok"] is True
+    assert "noise" in captured.err
+
+
+@pytest.mark.parametrize("env,expected", [("", None), ("/c.txt", "/c.txt")])
+def test_main_passes_cookie_env(capsys, monkeypatch, env, expected):
+    monkeypatch.setenv("YTM_COOKIES", env)
+    seen = {}
+
+    def fetch(video_id, language, *, cookiefile):
+        seen["cookiefile"] = cookiefile
+        raise TranscriptError("no_captions")
+    worker.main([VID, "-"], fetch=fetch)
+    assert seen["cookiefile"] == expected

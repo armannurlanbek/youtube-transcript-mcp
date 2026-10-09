@@ -5,6 +5,7 @@ The parent kills this process on timeout — a thread could not be killed."""
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import sys
@@ -26,8 +27,11 @@ def run(argv: list[str], *, fetch=fetch_captions, cookiefile: str | None = None)
     return {"ok": True, **fetched.to_json()}
 
 
-def main() -> None:
-    result = run(sys.argv[1:], cookiefile=os.environ.get("YTM_COOKIES") or None)
+def main(argv: list[str] | None = None, *, fetch=fetch_captions) -> None:
+    args = sys.argv[1:] if argv is None else argv
+    # Anything yt-dlp prints must not corrupt the one JSON line on stdout.
+    with contextlib.redirect_stdout(sys.stderr):
+        result = run(args, fetch=fetch, cookiefile=os.environ.get("YTM_COOKIES") or None)
     sys.stdout.write(json.dumps(result) + "\n")
 
 

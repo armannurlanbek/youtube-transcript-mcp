@@ -176,6 +176,8 @@ def fetch_captions(video_id: str, language: str | None, *, cookiefile: str | Non
                    ydl_factory=None) -> Fetched:
     """One metadata request, then exactly one caption track — never several languages
     at once (that triggers HTTP 429)."""
+    if not VIDEO_ID.fullmatch(video_id):
+        raise TranscriptError("invalid_url", video_id)
     if ydl_factory is None:
         import yt_dlp
         ydl_factory = yt_dlp.YoutubeDL
@@ -187,7 +189,10 @@ def fetch_captions(video_id: str, language: str | None, *, cookiefile: str | Non
     except TranscriptError:
         raise
     except Exception as exc:  # noqa: BLE001 - yt-dlp raises many types; the message decides
-        raise TranscriptError(classify_error(str(exc)), str(exc)) from exc
+        detail = str(exc)
+        if cookiefile:  # an OSError from the cookie save carries the filename
+            detail = detail.replace(cookiefile, "<cookies>")
+        raise TranscriptError(classify_error(detail), detail) from exc
     duration = info.get("duration")
     return Fetched(
         video_id=video_id,
