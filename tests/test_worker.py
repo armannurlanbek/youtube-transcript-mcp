@@ -51,13 +51,13 @@ def test_ytdlp_options():
 
 
 def test_fetch_captions_success():
-    got = fetch_captions(VID, None, cookiefile="/c.txt", ydl_factory=FakeYDL)
+    got = fetch_captions(VID, None, cookiefile="/nonexistent/c.txt", ydl_factory=FakeYDL)
     assert got == Fetched(video_id=VID, title="Birdhouse", channel="Shop Talk", duration_seconds=600,
                           published="2026-10-01",
                           track=Track("en-orig", "en", "auto", "https://cap/en-orig.vtt"),
                           vtt="WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nhi\n")
     assert FakeYDL.last.opened == ["https://cap/en-orig.vtt"]
-    assert FakeYDL.last.options["cookiefile"] == "/c.txt"
+    assert FakeYDL.last.options["cookiefile"] == "/nonexistent/c.txt"  # no jar yet: yt-dlp makes it
 
 
 def test_fetch_captions_missing_metadata():
@@ -201,3 +201,46 @@ def test_main_keeps_fd1_clean_from_child_processes():
     assert proc.stdout.count("\n") == 1
     assert json.loads(proc.stdout)["kind"] == "failed"
     assert "fd-noise" in proc.stderr
+
+
+class JarYDL(FakeYDL):
+    """Like yt-dlp: writes its cookie jar to the file it was given when it closes."""
+    def __exit__(self, *exc):
+        with open(self.options["cookiefile"], "w") as f:
+            f.write("NEW JAR")
+        return False
+
+
+def test_cookie_jar_is_updated_atomically_from_a_copy(tmp_path):
+    jar = tmp_path / "cookies.txt"
+    jar.write_text("OLD JAR")
+    seen = {}
+
+    def factory(options):
+        seen["path"] = options["cookiefile"]
+        seen["during"] = open(options["cookiefile"]).read()
+        seen["mode"] = oct(__import__("os").stat(options["cookiefile"]).st_mode & 0o777)
+        return JarYDL(options)
+    fetch_captions(VID, None, cookiefile=str(jar), ydl_factory=factory)
+    assert seen["path"] != str(jar) and seen["during"] == "OLD JAR" and seen["mode"] == "0o600"
+    assert jar.read_text() == "NEW JAR"
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["cookies.txt"]
+
+
+def test_cookie_jar_untouched_and_no_temp_left_on_failure(tmp_path):
+    jar = tmp_path / "cookies.txt"
+    jar.write_text("OLD JAR")
+    with pytest.raises(TranscriptError) as e:
+        fetch_captions(VID, None, cookiefile=str(jar),
+                       ydl_factory=lambda o: JarYDL(o, error=RuntimeError(f"HTTP 500 {o['cookiefile']}")))
+    assert jar.read_text() == "OLD JAR"
+    assert [p.name for p in tmp_path.iterdir()] == ["cookies.txt"]
+    assert str(tmp_path) not in e.value.detail and "<cookies>" in e.value.detail
+
+
+def test_cookie_jar_untouched_when_no_track(tmp_path):
+    jar = tmp_path / "cookies.txt"
+    jar.write_text("OLD JAR")
+    with pytest.raises(TranscriptError):
+        fetch_captions(VID, None, cookiefile=str(jar), ydl_factory=lambda o: JarYDL(o, info={"language": "en"}))
+    assert jar.read_text() == "OLD JAR" and [p.name for p in tmp_path.iterdir()] == ["cookies.txt"]

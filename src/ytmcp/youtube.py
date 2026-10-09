@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import os
 import re
+import shutil
+import tempfile
 from dataclasses import asdict, dataclass
+from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from ytmcp.errors import TranscriptError
@@ -195,20 +199,36 @@ def fetch_captions(video_id: str, language: str | None, *, cookiefile: str | Non
     if ydl_factory is None:
         import yt_dlp
         ydl_factory = yt_dlp.YoutubeDL
+    jar_copy: str | None = None
     try:
-        with ydl_factory(ytdlp_options(cookiefile)) as ydl:
+        if cookiefile and os.path.isfile(cookiefile):
+            # yt-dlp rewrites its cookie jar non-atomically, so give it a private copy
+            # and swap it in only after a clean run: a kill mid-save cannot truncate
+            # the real file.
+            fd, jar_copy = tempfile.mkstemp(prefix=".cookies-", suffix=".tmp",
+                                            dir=os.path.dirname(os.path.abspath(cookiefile)))
+            os.close(fd)  # mkstemp creates it 0600
+            shutil.copyfile(cookiefile, jar_copy)
+        with ydl_factory(ytdlp_options(jar_copy or cookiefile)) as ydl:
             info = ydl.extract_info(f"https://www.youtube.com/watch?v={video_id}", download=False) or {}
             track = choose_track(info, language)
             vtt = ydl.urlopen(track.url).read().decode("utf-8", errors="replace")
+        if jar_copy:
+            os.replace(jar_copy, cookiefile)
+            jar_copy = None
     except TranscriptError:
         raise
     except Exception as exc:  # noqa: BLE001 - yt-dlp raises many types; the message decides
         detail = str(exc)
-        if cookiefile:  # an OSError from the cookie save carries the filename
-            # str(OSError) shows the filename via repr(): backslashes doubled, quotes escaped
-            for form in sorted({cookiefile, repr(cookiefile)[1:-1]}, key=len, reverse=True):
-                detail = detail.replace(form, "<cookies>")
+        # An OSError from the cookie save carries a filename; str(OSError) shows it via
+        # repr(): backslashes doubled, quotes escaped.
+        paths = [p for p in (cookiefile, jar_copy) if p]
+        for form in sorted({f for p in paths for f in (p, repr(p)[1:-1])}, key=len, reverse=True):
+            detail = detail.replace(form, "<cookies>")
         raise TranscriptError(classify_error(detail), detail) from exc
+    finally:
+        if jar_copy:
+            Path(jar_copy).unlink(missing_ok=True)
     duration = info.get("duration")
     return Fetched(
         video_id=video_id,
