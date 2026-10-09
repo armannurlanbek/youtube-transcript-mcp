@@ -1,0 +1,20 @@
+[Unit]
+Description=YouTube transcript MCP server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=__USER__
+WorkingDirectory=__DIR__
+EnvironmentFile=__DIR__/.env
+# deno solves YouTube's player challenge for yt-dlp; the venv runs the worker.
+Environment=PATH=__HOME__/.deno/bin:__DIR__/.venv/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=__DIR__/.venv/bin/python -m ytmcp
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+MemoryMax=700M
+
+[Install]
+WantedBy=multi-user.target
